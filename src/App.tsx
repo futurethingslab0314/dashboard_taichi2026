@@ -1,295 +1,205 @@
 import { useEffect, useMemo, useState } from "react";
-import { websitePages } from "./data";
-import type { ContentComponent, Language, Placement, ViewMode } from "./types";
+import type { Language, NotionContentObject, NotionDashboardData, NotionSectionTemplate, NotionZoneLayout } from "./types";
 
-type SheetPayload = {
-  components: ContentComponent[];
-  placements: Placement[];
-};
+type ViewMode = "sections" | "zones";
 
-function composePreview(items: ContentComponent[], language: Language) {
+function composeText(items: NotionContentObject[], language: Language) {
   return items.map((item) => item[language]).filter(Boolean).join("\n\n");
 }
 
-function formatUpdatedAt(value?: string) {
-  return value || "未更新";
+function objectLabel(item: NotionContentObject) {
+  return `${item.title} · ${item.type}`;
+}
+
+function previewSection(section: NotionSectionTemplate, lookup: Map<string, NotionContentObject>) {
+  const items = section.objectIds.map((id) => lookup.get(id)).filter(Boolean) as NotionContentObject[];
+  return items;
+}
+
+function previewZone(zone: NotionZoneLayout, sections: NotionSectionTemplate[], lookup: Map<string, NotionContentObject>) {
+  return zone.sectionIds
+    .map((id) => sections.find((section) => section.id === id))
+    .filter(Boolean)
+    .flatMap((section) => previewSection(section as NotionSectionTemplate, lookup));
+}
+
+function formatVisibility(value: boolean) {
+  return value ? "Visible" : "Hidden";
 }
 
 export default function App() {
-  const [view, setView] = useState<ViewMode>("components");
   const [language, setLanguage] = useState<Language>("zh");
-  const [componentRows, setComponentRows] = useState<ContentComponent[]>([]);
-  const [placements, setPlacements] = useState<Placement[]>([]);
-  const [selectedComponentId, setSelectedComponentId] = useState("");
-  const [selectedPlacementId, setSelectedPlacementId] = useState("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [syncStatus, setSyncStatus] = useState("等待 Google Sheet 資料");
+  const [view, setView] = useState<ViewMode>("sections");
+  const [data, setData] = useState<NotionDashboardData>({ contentObjects: [], sectionTemplates: [], zoneLayouts: [] });
+  const [selectedSectionId, setSelectedSectionId] = useState("");
+  const [selectedZoneId, setSelectedZoneId] = useState("");
+  const [loadingState, setLoadingState] = useState("Loading Notion data...");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    async function loadFromSheet() {
+
+    async function load() {
       try {
-        const response = await fetch("/api/sheets");
-        if (!response.ok) throw new Error(`load failed: ${response.status}`);
-        const payload = (await response.json()) as SheetPayload;
+        const response = await fetch("/api/notion");
+        if (!response.ok) throw new Error(`Failed to load: ${response.status}`);
+        const payload = (await response.json()) as NotionDashboardData;
         if (cancelled) return;
-        if (payload.components?.length) {
-          setComponentRows(payload.components);
-          setSelectedComponentId((current) => (payload.components.some((item) => item.id === current) ? current : payload.components[0].id));
-        }
-        if (payload.placements?.length) {
-          setPlacements(payload.placements);
-          setSelectedPlacementId((current) => (payload.placements.some((item) => item.id === current) ? current : payload.placements[0].id));
-          setSelectedTags((current) => (current.length ? current : payload.placements[0].refs));
-        }
-        setSyncStatus("已同步 Google Sheet");
-      } catch {
-        if (!cancelled) setSyncStatus("目前顯示本機資料，尚未連上 Google Sheet");
+        setData(payload);
+        setSelectedSectionId((current) => payload.sectionTemplates.some((item) => item.id === current) ? current : payload.sectionTemplates[0]?.id ?? "");
+        setSelectedZoneId((current) => payload.zoneLayouts.some((item) => item.id === current) ? current : payload.zoneLayouts[0]?.id ?? "");
+        setLoadingState("Connected to Notion");
+        setError("");
+      } catch (err) {
+        if (cancelled) return;
+        setLoadingState("Offline fallback");
+        setError(err instanceof Error ? err.message : "Failed to load Notion data");
       }
     }
 
-    loadFromSheet();
+    load();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const componentMap = useMemo(() => {
-    const map = new Map<string, ContentComponent>();
-    componentRows.forEach((item) => {
-      map.set(item.id, item);
-      map.set(item.title, item);
-    });
+  const contentLookup = useMemo(() => {
+    const map = new Map<string, NotionContentObject>();
+    data.contentObjects.forEach((item) => map.set(item.id, item));
     return map;
-  }, [componentRows]);
-  const selectedComponent = componentRows.find((item) => item.id === selectedComponentId) ?? null;
-  const selectedPlacement = placements.find((item) => item.id === selectedPlacementId) ?? null;
-  const selectedPlacementComponents = selectedTags
-    .map((id) => componentMap.get(id))
-    .filter(Boolean) as ContentComponent[];
-  const availableTags = componentRows;
+  }, [data.contentObjects]);
 
-  useEffect(() => {
-    if (!selectedPlacement) return;
-    setSelectedTags(selectedPlacement.refs);
-  }, [selectedPlacementId, selectedPlacement?.refs.join("|")]);
+  const selectedSection = data.sectionTemplates.find((item) => item.id === selectedSectionId) ?? null;
+  const selectedZone = data.zoneLayouts.find((item) => item.id === selectedZoneId) ?? null;
 
-  const selectedPlacementPreview = selectedPlacementComponents.length ? composePreview(selectedPlacementComponents, language) : "";
-  const selectedComponentPreview = selectedComponent ? selectedComponent[language] : "";
-  const selectedComponentAlt = selectedComponent ? selectedComponent[language === "zh" ? "en" : "zh"] : "";
-
-  const toggleTag = (tag: string) => {
-    const matched = componentRows.find((item) => item.id === tag || item.title === tag);
-    if (!matched) return;
-    setSelectedTags((current) => (current.includes(matched.id) ? current.filter((item) => item !== matched.id) : [...current, matched.id]));
-  };
+  const sectionPreviewItems = selectedSection ? previewSection(selectedSection, contentLookup) : [];
+  const zonePreviewItems = selectedZone ? previewZone(selectedZone, data.sectionTemplates, contentLookup) : [];
+  const selectedSectionContent = sectionPreviewItems.map((item) => item[language]).filter(Boolean).join("\n\n");
+  const selectedZoneContent = zonePreviewItems.map((item) => item[language]).filter(Boolean).join("\n\n");
 
   return (
-    <div className="app">
+    <div className="app-shell">
       <aside className="sidebar">
-        <div>
-          <p className="eyebrow">Big Bang! Futures</p>
-          <h1>文案 dashboard</h1>
+        <div className="brand">
+          <p className="eyebrow">TAICHI Notion Dashboard</p>
+          <h1>Content Browser</h1>
+          <p className="brand-copy">即時瀏覽 `Content Objects - Dedup`、`Section Templates`、`Zone Layout`。</p>
         </div>
-        <nav className="nav">
-          <button className={view === "components" ? "active" : ""} onClick={() => setView("components")}>文案元件</button>
-          <button className={view === "exhibition" ? "active" : ""} onClick={() => setView("exhibition")}>展場文案</button>
-          <button className={view === "website" ? "active" : ""} onClick={() => setView("website")}>官網文案</button>
-        </nav>
-        <div className="meta">
-          <span>元件 {componentRows.length}</span>
-          <span>展場 {placements.length}</span>
-          <span>頁面 {websitePages.length}</span>
-          <span>{syncStatus}</span>
+
+        <div className="nav-group">
+          <button className={view === "sections" ? "nav-button active" : "nav-button"} onClick={() => setView("sections")}>Section Templates</button>
+          <button className={view === "zones" ? "nav-button active" : "nav-button"} onClick={() => setView("zones")}>Zone Layout</button>
+        </div>
+
+        <div className="meta-grid">
+          <div className="meta-card"><span>Content Objects</span><strong>{data.contentObjects.length}</strong></div>
+          <div className="meta-card"><span>Section Templates</span><strong>{data.sectionTemplates.length}</strong></div>
+          <div className="meta-card"><span>Zone Layout</span><strong>{data.zoneLayouts.length}</strong></div>
+          <div className="meta-card"><span>Status</span><strong>{error || loadingState}</strong></div>
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main-pane">
         <header className="topbar">
-          <div className="segmented">
+          <div className="segmented-control">
             <button className={language === "zh" ? "active" : ""} onClick={() => setLanguage("zh")}>中文</button>
             <button className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")}>英文</button>
           </div>
-          <div className="hint">目前只顯示 {language === "zh" ? "中文" : "英文"}，右側為純閱讀模式。</div>
+          <div className="status-pill">{view === "sections" ? "Browse by Section Template" : "Browse by Zone Layout"}</div>
         </header>
 
-        <section className={`workspace ${view}`}>
+        <section className="workspace-grid">
           <section className="panel list-panel">
-            <h2>{view === "components" ? "文案元件名稱" : view === "exhibition" ? "展場區域" : "官網頁面"}</h2>
-            <div className="list">
-              {view === "components" &&
-                (componentRows.length ? (
-                componentRows.map((item) => (
-                  <button key={item.id} className={`item ${selectedComponent?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedComponentId(item.id)}>
+            <h2>{view === "sections" ? "Section Templates" : "Zone Layout"}</h2>
+            <div className="card-list">
+              {view === "sections" &&
+                data.sectionTemplates.map((item) => (
+                  <button key={item.id} className={`card ${selectedSection?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedSectionId(item.id)}>
                     <strong>{item.title}</strong>
-                    <span>{item.id}</span>
-                    <em>{formatUpdatedAt(item.updatedAt)}</em>
+                    <span>{item.sectionType} · {item.layoutStyle}</span>
+                    <em>{formatVisibility(item.visible)}</em>
                   </button>
-                ))
-                ) : (
-                  <div className="empty-state">尚未從 Google Sheet 載入文案元件。</div>
                 ))}
 
-              {view === "exhibition" &&
-                (placements.length ? (
-                placements.map((item) => (
-                  <button key={item.id} className={`item ${selectedPlacement?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedPlacementId(item.id)}>
-                    <strong>
-                      {item.number} {item.title}
-                    </strong>
-                    <span>{item.floor} · {item.area}</span>
-                    <em>{formatUpdatedAt(item.updatedAt)}</em>
-                  </button>
-                ))
-                ) : (
-                  <div className="empty-state">尚未從 Google Sheet 載入展場區域。</div>
-                ))}
-
-              {view === "website" &&
-                websitePages.map((page) => (
-                  <button key={page.id} className="item selected" onClick={() => undefined}>
-                    <strong>{page.title}</strong>
-                    <span>{page.id}</span>
-                    <em>{page.refs.length} refs</em>
+              {view === "zones" &&
+                data.zoneLayouts.map((item) => (
+                  <button key={item.id} className={`card ${selectedZone?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedZoneId(item.id)}>
+                    <strong>{item.order}. {item.title}</strong>
+                    <span>{item.page}</span>
+                    <em>{formatVisibility(item.visible)}</em>
                   </button>
                 ))}
             </div>
           </section>
 
-          <section className="panel middle-panel">
-            {view === "components" && selectedComponent && (
+          <section className="panel center-panel">
+            {view === "sections" && selectedSection && (
               <div className="stack">
-                <div className="editor-header">
+                <div className="panel-head">
                   <div>
-                    <p className="eyebrow">Google Sheet 原文</p>
-                    <h2>{selectedComponent.title}</h2>
-                    <p>{selectedComponent.id}</p>
+                    <p className="eyebrow">Section Template</p>
+                    <h2>{selectedSection.title}</h2>
+                    <p>{selectedSection.sectionType} · {selectedSection.layoutStyle}</p>
                   </div>
-                  <span className="badge">{formatUpdatedAt(selectedComponent.updatedAt)}</span>
+                  <span className="badge">{selectedSection.visible ? "Visible" : "Hidden"}</span>
                 </div>
-                <div className="readonly-block">
-                  <div className="readonly-label">中文</div>
-                  <div className="readonly-text">{selectedComponent.zh || "（空白）"}</div>
-                </div>
-                <div className="readonly-block">
-                  <div className="readonly-label">英文</div>
-                  <div className="readonly-text">{selectedComponent.en || "（empty）"}</div>
+
+                <div className="object-list">
+                  {sectionPreviewItems.length ? sectionPreviewItems.map((item) => (
+                    <article key={item.id} className="object-card">
+                      <div className="object-card-head">
+                        <strong>{objectLabel(item)}</strong>
+                        <span>{item.updatedAt}</span>
+                      </div>
+                      <p>{item[language] || "（空白）"}</p>
+                    </article>
+                  )) : <div className="empty-state">這個 section 還沒有連結任何 content object。</div>}
                 </div>
               </div>
             )}
 
-            {view === "exhibition" && selectedPlacement && (
+            {view === "zones" && selectedZone && (
               <div className="stack">
-                <div className="editor-header">
+                <div className="panel-head">
                   <div>
-                    <p className="eyebrow">展場區域</p>
-                    <h2>
-                      {selectedPlacement.number} {selectedPlacement.title}
-                    </h2>
-                    <p>
-                      {selectedPlacement.floor} · {selectedPlacement.area}
-                    </p>
+                    <p className="eyebrow">Zone Layout</p>
+                    <h2>{selectedZone.order}. {selectedZone.title}</h2>
+                    <p>{selectedZone.page}</p>
                   </div>
-                  <span className="badge">{formatUpdatedAt(selectedPlacement.updatedAt)}</span>
+                  <span className="badge">{selectedZone.visible ? "Visible" : "Hidden"}</span>
                 </div>
 
-                <div className="readonly-block">
-                  <div className="readonly-label">文案元件 Tag</div>
-                  <div className="tag-box">
-                    {availableTags.map((item) => {
-                      const active = selectedTags.includes(item.id) || selectedTags.includes(item.title);
-                      return (
-                        <button key={item.id} className={`tag ${active ? "active" : ""}`} onClick={() => toggleTag(item.id)}>
-                          {item.title}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="save-note">只能從既有文案元件名稱選擇，多選後會在右側組合成完整文案。</div>
-                </div>
-
-                <div className="readonly-block">
-                  <div className="readonly-label">已選元件</div>
-                  <div className="readonly-text">{selectedPlacementComponents.map((item) => item.title).join("、") || "尚未選擇"}</div>
-                </div>
-              </div>
-            )}
-
-            {view === "website" && (
-              <div className="stack">
-                <div className="editor-header">
-                  <div>
-                    <p className="eyebrow">官網頁面</p>
-                    <h2>頁面文案總覽</h2>
-                    <p>目前為純閱讀模式</p>
-                  </div>
-                </div>
-                <div className="preview-list">
-                  {websitePages.map((page) => {
-                    const refs = page.refs.map((id) => componentMap.get(id)).filter(Boolean) as ContentComponent[];
-                    return (
-                      <article key={page.id} className="preview-card">
-                        <strong>{page.title}</strong>
-                        <p>{page.id}</p>
-                        <p>{composePreview(refs, language) || "（未對應內容）"}</p>
-                      </article>
-                    );
-                  })}
+                <div className="object-list">
+                  {zonePreviewItems.length ? zonePreviewItems.map((item) => (
+                    <article key={item.id} className="object-card">
+                      <div className="object-card-head">
+                        <strong>{objectLabel(item)}</strong>
+                        <span>{item.updatedAt}</span>
+                      </div>
+                      <p>{item[language] || "（空白）"}</p>
+                    </article>
+                  )) : <div className="empty-state">這個 zone 還沒有對應任何 section template。</div>}
                 </div>
               </div>
             )}
           </section>
 
           <section className="panel preview-panel">
-            <h2>右側顯示</h2>
-
-            {view === "components" && selectedComponent && (
+            <h2>完整文案</h2>
+            {view === "sections" && selectedSection && (
               <article className="preview-card">
-                <strong>{selectedComponent.title}</strong>
-                <p className="preview-subtitle">
-                  中文 / 英文切換對照
-                </p>
-                <div className="preview-rows">
-                  <div>
-                    <span className="readonly-label">中文</span>
-                    <p>{selectedComponent.zh || "（空白）"}</p>
-                  </div>
-                  <div>
-                    <span className="readonly-label">英文</span>
-                    <p>{selectedComponent.en || "（empty）"}</p>
-                  </div>
-                  <div>
-                    <span className="readonly-label">目前選取語系</span>
-                    <p>{selectedComponentPreview || "（空白）"}</p>
-                  </div>
-                  <div>
-                    <span className="readonly-label">另一語系</span>
-                    <p>{selectedComponentAlt || "（空白）"}</p>
-                  </div>
-                </div>
+                <strong>{selectedSection.title}</strong>
+                <p className="preview-subtitle">Section 內所有文案物件</p>
+                <p className="preview-copy">{selectedSectionContent || "（沒有內容）"}</p>
               </article>
             )}
 
-            {view === "exhibition" && selectedPlacement && (
+            {view === "zones" && selectedZone && (
               <article className="preview-card">
-                <strong>
-                  {selectedPlacement.number} {selectedPlacement.title}
-                </strong>
-                <p className="preview-subtitle">完整展場文案預覽</p>
-                <p className="preview-copy">{selectedPlacementPreview || "請先勾選上方文案元件 tag"}</p>
-                <p className="save-note">版位編號：{selectedPlacement.number} · 區域：{selectedPlacement.floor} · {selectedPlacement.area}</p>
+                <strong>{selectedZone.order}. {selectedZone.title}</strong>
+                <p className="preview-subtitle">Zone 內所有 section 的完整文案</p>
+                <p className="preview-copy">{selectedZoneContent || "（沒有內容）"}</p>
               </article>
-            )}
-
-            {view === "website" && (
-              <div className="preview-list">
-                {websitePages.map((page) => (
-                  <article key={page.id} className="preview-card">
-                    <strong>{page.title}</strong>
-                    <p>{page.refs.join(" · ")}</p>
-                  </article>
-                ))}
-              </div>
             )}
           </section>
         </section>

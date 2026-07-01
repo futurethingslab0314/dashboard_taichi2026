@@ -1,6 +1,6 @@
 # 文案 Dashboard
 
-This folder is a standalone Vite + React dashboard for managing Big Bang! Futures copy.
+This folder is a standalone Vite + React dashboard for browsing Big Bang! Futures Notion content.
 
 ## Local development
 
@@ -21,11 +21,10 @@ npm run build
 2. Set the build command to `npm run build`.
 3. Set the output directory to `dist`.
 4. Add environment variables:
-   - `GOOGLE_SHEET_ID`
-   - `GOOGLE_SERVICE_ACCOUNT_EMAIL`
-   - `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`
-5. Share the target Google Sheet with the service account email.
+   - `NOTION_TOKEN`
+   - `NOTION_ROOT_PAGE_ID`
+5. Share the parent Notion page with the integration.
 
 ## API
 
-The dashboard uses `dashboard/api/sheets.ts` as a Vercel serverless function to read and write Google Sheets.
+The dashboard uses `dashboard/api/notion.ts` as a Vercel serverless function to read the three Notion databases from a single parent page.
