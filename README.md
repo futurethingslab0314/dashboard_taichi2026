@@ -22,8 +22,10 @@ npm run build
 3. Set the output directory to `dist`.
 4. Add environment variables:
    - `NOTION_TOKEN`
-   - `NOTION_ROOT_PAGE_ID`
-5. Share the parent Notion page with the integration.
+   - `object_ID`
+   - `section_ID`
+   - `zone_ID`
+5. Share each target Notion database with the integration.
 
 ## API
 

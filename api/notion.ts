@@ -6,7 +6,9 @@ import type {
 } from "../src/types";
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const NOTION_ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID;
+const OBJECT_DATABASE_ID = process.env.object_ID;
+const SECTION_DATABASE_ID = process.env.section_ID;
+const ZONE_DATABASE_ID = process.env.zone_ID;
 const API_BASE = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
 
@@ -37,7 +39,9 @@ type NotionDatabaseQueryResponse = {
 
 function requireEnv() {
   if (!NOTION_TOKEN) throw new Error("Missing NOTION_TOKEN");
-  if (!NOTION_ROOT_PAGE_ID) throw new Error("Missing NOTION_ROOT_PAGE_ID");
+  if (!OBJECT_DATABASE_ID) throw new Error("Missing object_ID");
+  if (!SECTION_DATABASE_ID) throw new Error("Missing section_ID");
+  if (!ZONE_DATABASE_ID) throw new Error("Missing zone_ID");
 }
 
 async function notionFetch(path: string, init?: RequestInit) {
@@ -54,17 +58,6 @@ async function notionFetch(path: string, init?: RequestInit) {
     throw new Error(`Notion request failed: ${response.status} ${await response.text()}`);
   }
   return response;
-}
-
-async function getBlockChildren(blockId: string) {
-  const response = await notionFetch(`/blocks/${blockId}/children?page_size=100`);
-  const data = (await response.json()) as { results: NotionBlock[]; next_cursor?: string | null; has_more?: boolean };
-  return data.results;
-}
-
-async function findChildDatabases(rootId: string) {
-  const children = await getBlockChildren(rootId);
-  return children.filter((item) => item.type === "child_database");
 }
 
 function pickTitle(property: { type: string; title?: Array<{ plain_text: string }> }) {
@@ -166,29 +159,10 @@ async function loadZoneLayouts(databaseId: string) {
 export default async function handler() {
   try {
     requireEnv();
-    const databases = await findChildDatabases(NOTION_ROOT_PAGE_ID!);
-    const titles = databases
-      .map((item) => ({ id: item.id, title: item.child_database?.title ?? "" }))
-      .filter((item) => item.title);
-
-    const contentDb = findByNames(titles, ["Content Objects - Dedup", "Content Objects"])?.[0];
-    const sectionDb = findByNames(titles, ["Section Templates"])?.[0];
-    const zoneDb = findByNames(titles, ["Pages / Zone Layout"])?.[0];
-
-    if (!contentDb || !sectionDb || !zoneDb) {
-      return Response.json(
-        {
-          error: "Could not find the three databases under NOTION_ROOT_PAGE_ID.",
-          discovered: titles,
-        },
-        { status: 500 },
-      );
-    }
-
     const [contentObjects, sectionTemplates, zoneLayouts] = await Promise.all([
-      loadContentObjects(contentDb),
-      loadSectionTemplates(sectionDb),
-      loadZoneLayouts(zoneDb),
+      loadContentObjects(OBJECT_DATABASE_ID!),
+      loadSectionTemplates(SECTION_DATABASE_ID!),
+      loadZoneLayouts(ZONE_DATABASE_ID!),
     ]);
 
     const payload: NotionDashboardData = {
